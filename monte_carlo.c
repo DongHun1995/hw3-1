@@ -9,24 +9,26 @@
 double monte_carlo(double *xs, double *ys, int num_points, int mpi_rank, int mpi_world_size, int threads_per_process)
 {
   int count = 0;
-  int num_points_per_proc = num_points / mpi_world_size;
+  // 프로세스로 num_point 쪼갬
+  int num_points_per_process = num_points / mpi_world_size;
 
-  // scatter the points to all processes
-  double *x_buf = (double *)malloc(num_points_per_proc * sizeof(double));
-  double *y_buf = (double *)malloc(num_points_per_proc * sizeof(double));
-  MPI_Scatter(xs, num_points_per_proc, MPI_DOUBLE, x_buf, num_points_per_proc, MPI_DOUBLE, 0, MPI_COMM_WORLD);
-  MPI_Scatter(ys, num_points_per_proc, MPI_DOUBLE, y_buf, num_points_per_proc, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+  // 쪼갠 프로세스별 num_point 메모리 할당
+  double *x_buf = (double *)malloc(num_points_per_process * sizeof(double));
+  double *y_buf = (double *)malloc(num_points_per_process * sizeof(double));
 
-// set up OpenMP parallel region
+  // 각 프로세스별로 xs, ys scatter
+  MPI_Scatter(xs, num_points_per_process, MPI_DOUBLE, x_buf, num_points_per_process, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+  MPI_Scatter(ys, num_points_per_process, MPI_DOUBLE, y_buf, num_points_per_process, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+
+// openMP 적용
 #pragma omp parallel num_threads(threads_per_process)
   {
     int i;
     int local_count = 0;
     double x, y;
-
-// loop over the points assigned to this thread
+// 반복문 병렬 처리
 #pragma omp for schedule(static)
-    for (i = 0; i < num_points_per_proc; i++)
+    for (i = 0; i < num_points_per_process; i++)
     {
       x = x_buf[i];
       y = y_buf[i];
@@ -35,12 +37,12 @@ double monte_carlo(double *xs, double *ys, int num_points, int mpi_rank, int mpi
         local_count++;
     }
 
-// reduce the counts from all threads in this process
+// count 합치기
 #pragma omp atomic
     count += local_count;
   }
 
-  // gather the counts from all processes and compute the total count
+  // scatter해서 count 계산한거 gather 하기
   int *counts = NULL;
   if (mpi_rank == 0)
   {
@@ -48,7 +50,7 @@ double monte_carlo(double *xs, double *ys, int num_points, int mpi_rank, int mpi
   }
   MPI_Gather(&count, 1, MPI_INT, counts, 1, MPI_INT, 0, MPI_COMM_WORLD);
 
-  // compute the total count and return the estimated PI value
+  // 전체 확률 계산후 memory free
   if (mpi_rank == 0)
   {
     int total_count = 0;
